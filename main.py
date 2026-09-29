@@ -1,8 +1,72 @@
 # main.py
-from fastapi import FastAPI    # import the FastAPI web framework
+from fastapi import FastAPI, HTTPException   # HTTPException lets us return proper error codes
+from pydantic import BaseModel               # for validating request bodies
 
-app = FastAPI()                # create the application object that will hold all our endpoints
+from app.bigram_model import BigramModel     # existing bigram logic
+from app.embeddings import EmbeddingModel    # spaCy embedding logic
 
-@app.get("/")                  # register a GET endpoint at the root URL "/"
-def read_root():               # this function runs whenever someone visits "/"
-    return {"message": "Hello, FastAPI with UV!"}   # FastAPI converts this dict to JSON automatically
+app = FastAPI()
+
+# Bigram model  
+corpus = [
+    "The Count of Monte Cristo is a novel written by Alexandre Dumas. \
+It tells the story of Edmond Dantès, who is falsely imprisoned and later seeks revenge.",
+    "this is another example sentence",
+    "we are generating text based on bigram probabilities",
+    "bigram models are simple but effective",
+]
+bigram_model = BigramModel(corpus)
+
+# Embedding model 
+# Created once at startup so every request reuses the loaded spaCy model
+embedding_model = EmbeddingModel("en_core_web_lg")
+
+
+# Request schemas 
+class TextGenerationRequest(BaseModel):
+    start_word: str
+    length: int
+
+
+class EmbeddingRequest(BaseModel):
+    word: str                                # the query word to embed
+
+
+class SimilarityRequest(BaseModel):
+    word1: str
+    word2: str
+
+
+# ---------- Endpoints ----------
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}
+
+
+@app.post("/generate")
+def generate_text(request: TextGenerationRequest):
+    generated_text = bigram_model.generate_text(request.start_word, request.length)
+    return {"generated_text": generated_text}
+
+
+@app.post("/embedding")
+def get_embedding(request: EmbeddingRequest):
+    # reject empty input so we don't return a meaningless vector
+    if not request.word.strip():
+        raise HTTPException(status_code=422, detail="word must not be empty")
+    # reject words spaCy has no vector for (otherwise we'd return 300 zeros)
+    if not embedding_model.has_vector(request.word):
+        raise HTTPException(status_code=404, detail="No embedding found for this word")
+
+    vector = embedding_model.get_embedding(request.word)
+    return {
+        "word": request.word,
+        "dimension": len(vector),            
+        "embedding": vector,
+    }
+
+
+@app.post("/similarity")                     # bonus endpoint
+def get_similarity(request: SimilarityRequest):
+    score = embedding_model.get_similarity(request.word1, request.word2)
+    return {"word1": request.word1, "word2": request.word2, "similarity": score}
